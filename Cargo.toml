@@ -1,0 +1,10 @@
+[package]
+name = "cometbft-handshake"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+rand_core = { version = "0.6", default-features = false, features = ["std"] }
+ed25519-consensus = { version = "2.1", default-features = false }
+curve25519-dalek-ng = { version = "4.1", default-features = false }
