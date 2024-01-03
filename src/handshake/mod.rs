@@ -1,8 +1,6 @@
-use std::io;
-use std::io::Read;
-use std::{cmp, error::Error, slice};
+use std::{cmp, error::Error, io, slice};
 
-use ed25519_consensus::{SigningKey, VerificationKey};
+use ed25519_consensus::VerificationKey;
 use merlin::Transcript;
 use rand_core::OsRng;
 use subtle::ConstantTimeEq;
@@ -20,39 +18,12 @@ use curve25519_dalek_ng::{
 };
 use tendermint_proto::v0_38 as proto;
 
-use nonce::{Nonce, SIZE as NONCE_SIZE};
-
 use kdf::Kdf;
-
+use keys::PrivateKey;
+use nonce::Nonce;
 mod kdf;
-
-#[derive(Clone)]
-pub struct PrivateKey {
-    signing_key: SigningKey,
-}
-
-impl PrivateKey {
-    pub fn generate() -> Self {
-        let csprng = OsRng {};
-        let signing_key = ed25519_consensus::SigningKey::new(csprng);
-
-        Self { signing_key }
-    }
-
-    pub fn public_key(self) -> PublicKey {
-        PublicKey {
-            verification_key: self.signing_key.verification_key(),
-        }
-    }
-
-    pub fn sign(self, msg: &[u8]) -> ed25519_consensus::Signature {
-        self.signing_key.sign(msg)
-    }
-}
-
-pub struct PublicKey {
-    verification_key: VerificationKey,
-}
+mod keys;
+mod nonce;
 
 pub fn encode_initial_handshake(eph_pubkey: &MontgomeryPoint) -> Vec<u8> {
     // go implementation:
@@ -236,8 +207,6 @@ pub const DATA_MAX_SIZE: usize = 1024;
 /// 4 + 1024 == 1028 total frame size
 const DATA_LEN_SIZE: usize = 4;
 const TOTAL_FRAME_SIZE: usize = DATA_MAX_SIZE + DATA_LEN_SIZE;
-
-mod nonce;
 
 /// Decrypt AEAD authenticated data
 fn decrypt(
