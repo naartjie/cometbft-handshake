@@ -1,6 +1,6 @@
 # Peer-to-peer handshake
 
-This is a Rust p2p handshake protocol implementation  for [CometBFT](https://github.com/cometbft/cometbft). Prior art exists at [tendermint-rs](https://github.com/informalsystems/tendermint-rs.git), it was used to bootstrap this project and uses the same dependencies.
+This is a Rust p2p handshake protocol implementation  for [CometBFT](https://github.com/cometbft/cometbft). Prior art exists at [tendermint-rs](https://github.com/informalsystems/tendermint-rs.git), it was used to bootstrap this project and uses the same dependencies, it also reuses the tendermint-proto, the proto struct definitions used by the protocol.
 
 ## Pre-requisites
 
