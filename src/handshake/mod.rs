@@ -1,18 +1,17 @@
-use std::{cmp, error::Error, io, slice};
+use std::{error::Error, slice};
 
 use ed25519_consensus::VerificationKey;
 use merlin::Transcript;
 use rand_core::OsRng;
 use subtle::ConstantTimeEq;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
 use prost::Message as _;
 
-use chacha20poly1305::{
-    aead::{generic_array::GenericArray, AeadInPlace, KeyInit},
-    ChaCha20Poly1305,
-};
+use chacha20poly1305::{aead::KeyInit, ChaCha20Poly1305};
 use curve25519_dalek_ng::{
     constants::X25519_BASEPOINT, montgomery::MontgomeryPoint, scalar::Scalar,
 };
@@ -21,6 +20,7 @@ use tendermint_proto::v0_38 as proto;
 use kdf::Kdf;
 use keys::PrivateKey;
 use nonce::Nonce;
+mod encrypted_channel;
 mod kdf;
 mod keys;
 mod nonce;
@@ -46,14 +46,6 @@ pub fn decode_initial_handshake(bytes: &[u8]) -> Result<MontgomeryPoint, &str> {
     Ok(MontgomeryPoint(eph_pubkey_bytes))
 }
 
-pub fn sort32(first: [u8; 32], second: [u8; 32]) -> ([u8; 32], [u8; 32]) {
-    if second > first {
-        (first, second)
-    } else {
-        (second, first)
-    }
-}
-
 pub fn got_key(
     private_key: &PrivateKey,
     local_eph_privkey: &Scalar,
@@ -67,6 +59,14 @@ pub fn got_key(
     ),
     Box<dyn Error>,
 > {
+    fn sort32(first: [u8; 32], second: [u8; 32]) -> ([u8; 32], [u8; 32]) {
+        if second > first {
+            (first, second)
+        } else {
+            (second, first)
+        }
+    }
+
     let local_eph_pubkey = X25519_BASEPOINT * local_eph_privkey;
 
     // Compute common shared secret.
@@ -165,13 +165,15 @@ pub async fn share_auth_signature(
 
     let mut send_nonce = Nonce::default();
 
-    let _size = encrypt_and_write(stream, &mut send_nonce, send_cipher, &buf).await?;
+    let _size =
+        encrypted_channel::encrypt_and_write(stream, &mut send_nonce, send_cipher, &buf).await?;
     // stream.write_all(&buf).await?;
 
     let mut buf = vec![0; AUTH_SIG_MSG_RESPONSE_LEN];
 
     let mut recv_nonce = Nonce::default();
-    let _size = read_and_decrypt(stream, &mut recv_nonce, recv_cipher, &mut buf).await?;
+    let _size =
+        encrypted_channel::read_and_decrypt(stream, &mut recv_nonce, recv_cipher, &mut buf).await?;
     // stream.read_exact(&mut buf).await?;
 
     decode_auth_signature(&buf)
@@ -200,170 +202,6 @@ pub fn got_signature(
 
     // We've authorized.
     Ok(remote_pubkey)
-}
-
-pub const TAG_SIZE: usize = 16;
-pub const DATA_MAX_SIZE: usize = 1024;
-/// 4 + 1024 == 1028 total frame size
-const DATA_LEN_SIZE: usize = 4;
-const TOTAL_FRAME_SIZE: usize = DATA_MAX_SIZE + DATA_LEN_SIZE;
-
-/// Decrypt AEAD authenticated data
-fn decrypt(
-    ciphertext: &[u8],
-    recv_cipher: &ChaCha20Poly1305,
-    recv_nonce: &Nonce,
-    out: &mut [u8],
-) -> Result<usize, Box<dyn Error>> {
-    if ciphertext.len() < TAG_SIZE {
-        return Err("ciphertext shorter than TAG_SIZE".into());
-    }
-
-    // Split ChaCha20 ciphertext from the Poly1305 tag
-    let (ct, tag) = ciphertext.split_at(ciphertext.len() - TAG_SIZE);
-
-    if out.len() < ct.len() {
-        return Err("out.len < ct.len()".into());
-    }
-
-    let in_out = &mut out[..ct.len()];
-    in_out.copy_from_slice(ct);
-
-    recv_cipher
-        .decrypt_in_place_detached(
-            GenericArray::from_slice(recv_nonce.to_bytes()),
-            b"",
-            in_out,
-            tag.into(),
-        )
-        .map_err(|e| format!("aead: {}", e.to_string()))?;
-
-    Ok(in_out.len())
-}
-
-async fn read_and_decrypt(
-    io_handler: &mut TcpStream,
-    // buffer: &mut Vec<u8>,
-    nonce: &mut Nonce,
-    cipher: &ChaCha20Poly1305,
-    data: &mut [u8],
-) -> io::Result<usize> {
-    // if !buffer.is_empty() {
-    //     let n = cmp::min(data.len(), buffer.len());
-    //     data.copy_from_slice(&buffer[..n]);
-    //     let mut leftover_portion = vec![
-    //         0;
-    //         buffer
-    //             .len()
-    //             .checked_sub(n)
-    //             .expect("leftover calculation failed")
-    //     ];
-    //     leftover_portion.clone_from_slice(&buffer[n..]);
-    //     // TODO!!!!
-    //     *buffer = leftover_portion;
-
-    //     return Ok(n);
-    // }
-
-    let mut sealed_frame = [0_u8; TAG_SIZE + TOTAL_FRAME_SIZE];
-    io_handler.read_exact(&mut sealed_frame).await?;
-
-    // decrypt the frame
-    let mut frame = [0_u8; TOTAL_FRAME_SIZE];
-    let res = decrypt(&sealed_frame, &cipher, &nonce, &mut frame);
-
-    if let Err(err) = res {
-        return Err(io::Error::new(io::ErrorKind::Other, err.to_string()));
-    }
-
-    nonce.increment();
-    // end decryption
-
-    let chunk_length = u32::from_le_bytes(frame[..4].try_into().expect("chunk framing failed"));
-
-    if chunk_length as usize > DATA_MAX_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("chunk is too big: {chunk_length}! max: {DATA_MAX_SIZE}"),
-        ));
-    }
-
-    let mut chunk = vec![0; chunk_length as usize];
-    chunk.clone_from_slice(
-        &frame[DATA_LEN_SIZE
-            ..(DATA_LEN_SIZE
-                .checked_add(chunk_length as usize)
-                .expect("chunk size addition overflow"))],
-    );
-
-    let n = cmp::min(data.len(), chunk.len());
-    data[..n].copy_from_slice(&chunk[..n]);
-    // buffer.copy_from_slice(&chunk[n..]);
-
-    Ok(n)
-}
-
-fn encrypt(
-    chunk: &[u8],
-    send_cipher: &ChaCha20Poly1305,
-    send_nonce: &Nonce,
-    sealed_frame: &mut [u8; TAG_SIZE + TOTAL_FRAME_SIZE],
-) -> Result<(), Box<dyn Error>> {
-    assert!(!chunk.is_empty(), "chunk is empty");
-    assert!(
-        chunk.len() <= TOTAL_FRAME_SIZE - DATA_LEN_SIZE,
-        "chunk is too big: {}! max: {}",
-        chunk.len(),
-        DATA_MAX_SIZE,
-    );
-    sealed_frame[..DATA_LEN_SIZE].copy_from_slice(&(chunk.len() as u32).to_le_bytes());
-    sealed_frame[DATA_LEN_SIZE..DATA_LEN_SIZE + chunk.len()].copy_from_slice(chunk);
-
-    let tag = send_cipher
-        .encrypt_in_place_detached(
-            GenericArray::from_slice(send_nonce.to_bytes()),
-            b"",
-            &mut sealed_frame[..TOTAL_FRAME_SIZE],
-        )
-        .map_err(|e| format!("aead {}", e))?;
-
-    sealed_frame[TOTAL_FRAME_SIZE..].copy_from_slice(tag.as_slice());
-
-    Ok(())
-}
-
-// Writes encrypted frames of `TAG_SIZE` + `TOTAL_FRAME_SIZE`
-async fn encrypt_and_write(
-    io_handler: &mut TcpStream,
-    // send_state: &mut SendState,
-    nonce: &mut Nonce,
-    cipher: &ChaCha20Poly1305,
-    data: &[u8],
-) -> io::Result<usize> {
-    let mut n = 0_usize;
-    let mut data_copy = data;
-    while !data_copy.is_empty() {
-        let chunk: &[u8];
-        if DATA_MAX_SIZE < data.len() {
-            chunk = &data[..DATA_MAX_SIZE];
-            data_copy = &data_copy[DATA_MAX_SIZE..];
-        } else {
-            chunk = data_copy;
-            data_copy = &[0_u8; 0];
-        }
-        let sealed_frame = &mut [0_u8; TAG_SIZE + TOTAL_FRAME_SIZE];
-        encrypt(chunk, &cipher, &nonce, sealed_frame)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-        nonce.increment();
-        // end encryption
-
-        io_handler.write_all(&sealed_frame[..]).await?;
-        n = n
-            .checked_add(chunk.len())
-            .expect("overflow when adding chunk lengths");
-    }
-
-    Ok(n)
 }
 
 pub async fn handshake_start(
