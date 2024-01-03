@@ -9,6 +9,6 @@ pub async fn main() -> Result<(), Box<dyn Error>> {
     let mut stream = TcpStream::connect(addr).await?;
     println!("connection to peer opened on {}", addr);
 
-    handshake::start_handshake(stream).await?;
+    handshake::do_handshake(stream).await?;
     Ok(())
 }

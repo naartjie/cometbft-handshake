@@ -1,4 +1,5 @@
-use std::{error::Error, slice};
+use std::io::Error;
+use std::slice;
 
 use ed25519_consensus::VerificationKey;
 use merlin::Transcript;
@@ -25,11 +26,11 @@ mod keys;
 mod nonce;
 mod wire_encryption;
 
-pub fn decode_remote_eph_pubkey(bytes: &[u8]) -> Result<MontgomeryPoint, &str> {
+pub fn decode_remote_eph_pubkey(bytes: &[u8]) -> Result<MontgomeryPoint, std::io::Error> {
     // go implementation
     // https://github.com/tendermint/tendermint/blob/9e98c74/p2p/conn/secret_connection.go#L315-L323
     if bytes.len() != 34 || bytes[..2] != [0x0a, 0x20] {
-        return Err("malformed_handshake");
+        return Err(Error::other("malformed_handshake"));
     }
 
     let eph_pubkey_bytes: [u8; 32] = bytes[2..].try_into().expect("framing failed");
@@ -48,7 +49,7 @@ pub fn got_key(
         ChaCha20Poly1305,
         ChaCha20Poly1305,
     ),
-    Box<dyn Error>,
+    std::io::Error,
 > {
     fn sort32(first: [u8; 32], second: [u8; 32]) -> ([u8; 32], [u8; 32]) {
         if second > first {
@@ -73,7 +74,7 @@ pub fn got_key(
     // - https://github.com/tendermint/kms/issues/142
     // - https://eprint.iacr.org/2019/526.pdf
     if shared_secret.as_bytes().ct_eq(&[0x00; 32]).unwrap_u8() == 1 {
-        return Err("low order key".into());
+        return Err(Error::other("low order key"));
     }
 
     // Sort by lexical order.
@@ -135,8 +136,9 @@ pub fn encode_auth_signature(
     buf
 }
 
-pub fn decode_auth_signature(bytes: &[u8]) -> Result<proto::p2p::AuthSigMessage, Box<dyn Error>> {
-    proto::p2p::AuthSigMessage::decode_length_delimited(bytes).map_err(|e| e.to_string().into())
+pub fn decode_auth_signature(bytes: &[u8]) -> Result<proto::p2p::AuthSigMessage, std::io::Error> {
+    proto::p2p::AuthSigMessage::decode_length_delimited(bytes)
+        .map_err(|e| Error::other(e.to_string()))
 }
 
 pub async fn share_auth_signature(
@@ -146,7 +148,7 @@ pub async fn share_auth_signature(
     local_signature: &ed25519_consensus::Signature,
     recv_cipher: &ChaCha20Poly1305,
     send_cipher: &ChaCha20Poly1305,
-) -> Result<proto::p2p::AuthSigMessage, Box<dyn Error>> {
+) -> Result<proto::p2p::AuthSigMessage, std::io::Error> {
     // 32 + 64 + (proto overhead = 1 prefix + 2 fields + 2 lengths + total length)
     const AUTH_SIG_MSG_RESPONSE_LEN: usize = 103;
 
@@ -176,23 +178,23 @@ pub async fn share_auth_signature(
 pub fn got_signature(
     auth_sig_msg: proto::p2p::AuthSigMessage,
     sc_mac: [u8; 32],
-) -> Result<VerificationKey, Box<dyn Error>> {
+) -> Result<VerificationKey, std::io::Error> {
+    let to_err = |e| Error::other(format!("signature error: {:?}", e));
+
     let pk_sum = auth_sig_msg.pub_key.and_then(|key| key.sum);
     let pk_sum = pk_sum.expect("missing key");
 
     let remote_pubkey = match pk_sum {
         proto::crypto::public_key::Sum::Ed25519(ref bytes) => {
-            ed25519_consensus::VerificationKey::try_from(&bytes[..]).map_err(|_| "signature error")
+            ed25519_consensus::VerificationKey::try_from(&bytes[..]).map_err(to_err)
         }
-        proto::crypto::public_key::Sum::Secp256k1(_) => Err("unsupported key"),
+        proto::crypto::public_key::Sum::Secp256k1(_) => Err(Error::other("unsupported key")),
     }?;
 
-    let remote_sig = ed25519_consensus::Signature::try_from(auth_sig_msg.sig.as_slice())
-        .map_err(|_| "signature error")?;
+    let remote_sig =
+        ed25519_consensus::Signature::try_from(auth_sig_msg.sig.as_slice()).map_err(to_err)?;
 
-    remote_pubkey
-        .verify(&remote_sig, &sc_mac)
-        .map_err(|_| "signature error")?;
+    remote_pubkey.verify(&remote_sig, &sc_mac).map_err(to_err)?;
 
     Ok(remote_pubkey)
 }
@@ -232,7 +234,12 @@ async fn receive_their_eph_pubkey(
     Ok(remote_eph_pubkey)
 }
 
-pub async fn start_handshake(stream: TcpStream) -> Result<(), Box<dyn Error>> {
+struct SecureConnection {
+    read_stream: OwnedReadHalf,
+    write_stream: OwnedWriteHalf,
+}
+
+pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
     let private_key = PrivateKey::generate();
     let local_eph_privkey = Scalar::random(&mut OsRng);
     let local_eph_pubkey = X25519_BASEPOINT * local_eph_privkey;
@@ -245,7 +252,7 @@ pub async fn start_handshake(stream: TcpStream) -> Result<(), Box<dyn Error>> {
         receive_their_eph_pubkey(&mut read_half),
     );
 
-    let remote_eph_pubkey = remote_eph_pubkey.expect("failed to get remote ephemeral pubkey");
+    let remote_eph_pubkey = remote_eph_pubkey?;
 
     let (local_signature, sc_mac, recv_cipher, send_cipher) =
         got_key(&private_key, &local_eph_privkey, &remote_eph_pubkey)?;
