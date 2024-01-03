@@ -16,72 +16,42 @@ use chacha20poly1305::{aead::KeyInit, ChaCha20Poly1305};
 use curve25519_dalek_ng::{
     constants::X25519_BASEPOINT, montgomery::MontgomeryPoint, scalar::Scalar,
 };
-use prost::Message as _;
 use tendermint_proto::v0_38 as proto;
 
 use kdf::Kdf;
 use keys::PrivateKey;
 use nonce::Nonce;
+
+mod codecs;
 mod kdf;
 mod keys;
 mod nonce;
 mod wire_encryption;
 
-pub fn decode_remote_eph_pubkey(bytes: &[u8]) -> Result<MontgomeryPoint, std::io::Error> {
-    // go implementation
-    // https://github.com/tendermint/tendermint/blob/9e98c74/p2p/conn/secret_connection.go#L315-L323
-    if bytes.len() != 34 || bytes[..2] != [0x0a, 0x20] {
-        return Err(Error::other("malformed_handshake"));
-    }
-
-    let eph_pubkey_bytes: [u8; 32] = bytes[2..].try_into().expect("framing failed");
-
-    Ok(MontgomeryPoint(eph_pubkey_bytes))
-}
-
-pub fn encode_auth_signature(
-    pub_key: &ed25519_consensus::VerificationKey,
-    signature: &ed25519_consensus::Signature,
-) -> Vec<u8> {
-    // Protobuf `AuthSigMessage`
-    let pub_key = proto::crypto::PublicKey {
-        sum: Some(proto::crypto::public_key::Sum::Ed25519(
-            pub_key.as_ref().to_vec(),
-        )),
-    };
-
-    let msg = proto::p2p::AuthSigMessage {
-        pub_key: Some(pub_key),
-        sig: signature.to_bytes().to_vec(),
-    };
-
-    let mut buf = Vec::new();
-    msg.encode_length_delimited(&mut buf)
-        .expect("couldn't encode AuthSigMessage proto");
-    buf
-}
-
-pub fn decode_auth_signature(bytes: &[u8]) -> Result<proto::p2p::AuthSigMessage, std::io::Error> {
-    proto::p2p::AuthSigMessage::decode_length_delimited(bytes)
-        .map_err(|e| Error::other(e.to_string()))
-}
-
-pub async fn share_auth_signature(
+async fn share_auth_signature(
     read_stream: &mut OwnedReadHalf,
     write_stream: &mut OwnedWriteHalf,
-    auth_signature: Vec<u8>,
-    recv_cipher: &ChaCha20Poly1305,
-    send_cipher: &ChaCha20Poly1305,
+    secure_connection_state: &SecureConnectionState,
+    local_private_key: PrivateKey,
 ) -> Result<proto::p2p::AuthSigMessage, std::io::Error> {
     // 32 + 64 + (proto overhead = 1 prefix + 2 fields + 2 lengths + total length)
     const AUTH_SIG_MSG_RESPONSE_LEN: usize = 103;
+
+    let local_signature = local_private_key
+        .clone()
+        .sign(&secure_connection_state.sc_mac);
+
+    let auth_signature = codecs::encode_auth_signature(
+        &local_private_key.public_key().verification_key,
+        &local_signature,
+    );
 
     let mut send_nonce = Nonce::default();
 
     let _size = wire_encryption::encrypt_and_write(
         write_stream,
         &mut send_nonce,
-        send_cipher,
+        &secure_connection_state.send_cipher,
         &auth_signature,
     )
     .await?;
@@ -90,12 +60,16 @@ pub async fn share_auth_signature(
     let mut buf = vec![0; AUTH_SIG_MSG_RESPONSE_LEN];
 
     let mut recv_nonce = Nonce::default();
-    let _size =
-        wire_encryption::read_and_decrypt(read_stream, &mut recv_nonce, recv_cipher, &mut buf)
-            .await?;
+    let _size = wire_encryption::read_and_decrypt(
+        read_stream,
+        &mut recv_nonce,
+        &secure_connection_state.recv_cipher,
+        &mut buf,
+    )
+    .await?;
     // stream.read_exact(&mut buf).await?;
 
-    decode_auth_signature(&buf)
+    codecs::decode_auth_signature(&buf)
 }
 
 pub fn got_signature(
@@ -122,21 +96,12 @@ pub fn got_signature(
     Ok(remote_pubkey)
 }
 
-fn encode_our_eph_pubkey(eph_pubkey: &MontgomeryPoint) -> Vec<u8> {
-    // go implementation:
-    // https://github.com/tendermint/tendermint/blob/9e98c74/p2p/conn/secret_connection.go#L307-L312
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&[0x22, 0x0a, 0x20]);
-    buf.extend_from_slice(eph_pubkey.as_bytes());
-    buf
-}
-
 async fn send_our_eph_pubkey(
     stream: &mut OwnedWriteHalf,
     local_eph_pubkey: &MontgomeryPoint,
 ) -> Result<(), std::io::Error> {
     stream
-        .write_all(&encode_our_eph_pubkey(local_eph_pubkey))
+        .write_all(&codecs::encode_our_eph_pubkey(local_eph_pubkey))
         .await?;
 
     Ok(())
@@ -151,7 +116,7 @@ async fn receive_their_eph_pubkey(
         .await?;
     let mut buf = vec![0; response_len as usize];
     stream.read_exact(&mut buf).await?;
-    let remote_eph_pubkey = decode_remote_eph_pubkey(&buf)
+    let remote_eph_pubkey = codecs::decode_remote_eph_pubkey(&buf)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("oh noes {}", e)))?;
 
     Ok(remote_eph_pubkey)
@@ -252,17 +217,11 @@ pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
         &remote_eph_pubkey,
     )?;
 
-    let local_signature = &private_key.clone().sign(&secure_connection_state.sc_mac);
-
-    let auth_signature =
-        encode_auth_signature(&private_key.public_key().verification_key, local_signature);
-
     let auth_sig_msg = share_auth_signature(
         &mut read_half,
         &mut write_half,
-        auth_signature,
-        &secure_connection_state.recv_cipher,
-        &secure_connection_state.send_cipher,
+        &secure_connection_state,
+        private_key,
     )
     .await?;
 
