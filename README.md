@@ -53,3 +53,9 @@ In the second terminal you should see:
 connecting to 127.0.0.1:26656, my peer id is VerificationKey("...")
 handshake was successful
 ```
+
+
+## TODO
+
+- takes too long to start target node
+- Box<dyn Error>: narrow it down?

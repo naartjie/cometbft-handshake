@@ -13,3 +13,13 @@ tokio = { version = "1.35", features = [
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 ed25519-consensus = { version = "2.1", default-features = false }
 curve25519-dalek-ng = { version = "4.1", default-features = false }
+merlin = { version = "2", defaul-features = false }
+subtle = { version = "2", default-features = false }
+zeroize = { version = "1", default-features = false }
+hkdf = { version = "0.12", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false, features = [
+  "reduced-round",
+] }
+tendermint-proto = "0.34"
+prost = { version = "0.12", default-features = false }
