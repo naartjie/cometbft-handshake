@@ -20,10 +20,10 @@ use tendermint_proto::v0_38 as proto;
 use kdf::Kdf;
 use keys::PrivateKey;
 use nonce::Nonce;
-mod encrypted_channel;
 mod kdf;
 mod keys;
 mod nonce;
+mod wire_encryption;
 
 pub fn encode_initial_handshake(eph_pubkey: &MontgomeryPoint) -> Vec<u8> {
     // go implementation:
@@ -166,14 +166,14 @@ pub async fn share_auth_signature(
     let mut send_nonce = Nonce::default();
 
     let _size =
-        encrypted_channel::encrypt_and_write(stream, &mut send_nonce, send_cipher, &buf).await?;
+        wire_encryption::encrypt_and_write(stream, &mut send_nonce, send_cipher, &buf).await?;
     // stream.write_all(&buf).await?;
 
     let mut buf = vec![0; AUTH_SIG_MSG_RESPONSE_LEN];
 
     let mut recv_nonce = Nonce::default();
     let _size =
-        encrypted_channel::read_and_decrypt(stream, &mut recv_nonce, recv_cipher, &mut buf).await?;
+        wire_encryption::read_and_decrypt(stream, &mut recv_nonce, recv_cipher, &mut buf).await?;
     // stream.read_exact(&mut buf).await?;
 
     decode_auth_signature(&buf)
