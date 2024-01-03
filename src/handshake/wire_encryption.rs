@@ -5,7 +5,10 @@ use chacha20poly1305::{
 use std::{cmp, error::Error, io};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream,
+    },
 };
 
 use crate::handshake::Nonce;
@@ -52,7 +55,7 @@ fn decrypt(
 }
 
 pub async fn read_and_decrypt(
-    io_handler: &mut TcpStream,
+    io_handler: &mut OwnedReadHalf,
     // buffer: &mut Vec<u8>,
     nonce: &mut Nonce,
     cipher: &ChaCha20Poly1305,
@@ -144,7 +147,7 @@ fn encrypt(
 
 // Writes encrypted frames of `TAG_SIZE` + `TOTAL_FRAME_SIZE`
 pub async fn encrypt_and_write(
-    io_handler: &mut TcpStream,
+    io_handler: &mut OwnedWriteHalf,
     // send_state: &mut SendState,
     nonce: &mut Nonce,
     cipher: &ChaCha20Poly1305,
