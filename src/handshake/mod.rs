@@ -1,3 +1,4 @@
+use std::io;
 use std::io::Error;
 use std::slice;
 
@@ -38,82 +39,6 @@ pub fn decode_remote_eph_pubkey(bytes: &[u8]) -> Result<MontgomeryPoint, std::io
     Ok(MontgomeryPoint(eph_pubkey_bytes))
 }
 
-pub fn got_key(
-    private_key: &PrivateKey,
-    local_eph_privkey: &Scalar,
-    remote_eph_pubkey: &MontgomeryPoint,
-) -> Result<
-    (
-        ed25519_consensus::Signature,
-        [u8; 32],
-        ChaCha20Poly1305,
-        ChaCha20Poly1305,
-    ),
-    std::io::Error,
-> {
-    fn sort32(first: [u8; 32], second: [u8; 32]) -> ([u8; 32], [u8; 32]) {
-        if second > first {
-            (first, second)
-        } else {
-            (second, first)
-        }
-    }
-
-    let local_eph_pubkey = X25519_BASEPOINT * local_eph_privkey;
-
-    // Compute common shared secret.
-    let shared_secret = local_eph_privkey * remote_eph_pubkey;
-
-    let mut transcript = Transcript::new(b"TENDERMINT_SECRET_CONNECTION_TRANSCRIPT_HASH");
-
-    // Reject all-zero outputs from X25519 (i.e. from low-order points)
-    //
-    // See the following for information on potential attacks this check
-    // aids in mitigating:
-    //
-    // - https://github.com/tendermint/kms/issues/142
-    // - https://eprint.iacr.org/2019/526.pdf
-    if shared_secret.as_bytes().ct_eq(&[0x00; 32]).unwrap_u8() == 1 {
-        return Err(Error::other("low order key"));
-    }
-
-    // Sort by lexical order.
-    let local_eph_pubkey_bytes = *local_eph_pubkey.as_bytes();
-    let (low_eph_pubkey_bytes, high_eph_pubkey_bytes) =
-        sort32(local_eph_pubkey_bytes, *remote_eph_pubkey.as_bytes());
-
-    transcript.append_message(b"EPHEMERAL_LOWER_PUBLIC_KEY", &low_eph_pubkey_bytes);
-    transcript.append_message(b"EPHEMERAL_UPPER_PUBLIC_KEY", &high_eph_pubkey_bytes);
-    transcript.append_message(b"DH_SECRET", shared_secret.as_bytes());
-
-    // Check if the local ephemeral public key was the least, lexicographically sorted.
-    let loc_is_least = local_eph_pubkey_bytes == low_eph_pubkey_bytes;
-
-    let kdf = Kdf::derive_secrets_and_challenge(shared_secret.as_bytes(), loc_is_least);
-
-    let mut sc_mac: [u8; 32] = [0; 32];
-
-    transcript.challenge_bytes(b"SECRET_CONNECTION_MAC", &mut sc_mac);
-
-    // Sign the challenge bytes for authentication.
-    let local_signature = private_key.clone().sign(&sc_mac);
-
-    // Ok((
-    //     sc_mac,
-    //     ChaCha20Poly1305::new(&kdf.recv_secret.into()),
-    //     ChaCha20Poly1305::new(&kdf.send_secret.into()),
-    //     kdf,
-    //     local_signature,
-    // ));
-
-    Ok((
-        local_signature,
-        sc_mac,
-        ChaCha20Poly1305::new(&kdf.recv_secret.into()),
-        ChaCha20Poly1305::new(&kdf.send_secret.into()),
-    ))
-}
-
 pub fn encode_auth_signature(
     pub_key: &ed25519_consensus::VerificationKey,
     signature: &ed25519_consensus::Signature,
@@ -144,24 +69,22 @@ pub fn decode_auth_signature(bytes: &[u8]) -> Result<proto::p2p::AuthSigMessage,
 pub async fn share_auth_signature(
     read_stream: &mut OwnedReadHalf,
     write_stream: &mut OwnedWriteHalf,
-    local_private_key: &PrivateKey,
-    local_signature: &ed25519_consensus::Signature,
+    auth_signature: Vec<u8>,
     recv_cipher: &ChaCha20Poly1305,
     send_cipher: &ChaCha20Poly1305,
 ) -> Result<proto::p2p::AuthSigMessage, std::io::Error> {
     // 32 + 64 + (proto overhead = 1 prefix + 2 fields + 2 lengths + total length)
     const AUTH_SIG_MSG_RESPONSE_LEN: usize = 103;
 
-    let buf = encode_auth_signature(
-        &local_private_key.clone().public_key().verification_key,
-        local_signature,
-    );
-
     let mut send_nonce = Nonce::default();
 
-    let _size =
-        wire_encryption::encrypt_and_write(write_stream, &mut send_nonce, send_cipher, &buf)
-            .await?;
+    let _size = wire_encryption::encrypt_and_write(
+        write_stream,
+        &mut send_nonce,
+        send_cipher,
+        &auth_signature,
+    )
+    .await?;
     // stream.write_all(&buf).await?;
 
     let mut buf = vec![0; AUTH_SIG_MSG_RESPONSE_LEN];
@@ -234,10 +157,85 @@ async fn receive_their_eph_pubkey(
     Ok(remote_eph_pubkey)
 }
 
+struct SecureConnection {
+    read_stream: OwnedReadHalf,
+    write_stream: OwnedWriteHalf,
+}
+
+struct SecureConnectionState {
+    sc_mac: [u8; 32],
+    send_cipher: ChaCha20Poly1305,
+    recv_cipher: ChaCha20Poly1305,
+}
+
+impl SecureConnectionState {
+    pub fn got_key_init_secure_connection(
+        local_eph_privkey: &Scalar,
+        remote_eph_pubkey: &MontgomeryPoint,
+    ) -> Result<SecureConnectionState, std::io::Error> {
+        fn sort32(first: [u8; 32], second: [u8; 32]) -> ([u8; 32], [u8; 32]) {
+            if second > first {
+                (first, second)
+            } else {
+                (second, first)
+            }
+        }
+
+        let local_eph_pubkey = X25519_BASEPOINT * local_eph_privkey;
+        let shared_secret = local_eph_privkey * remote_eph_pubkey;
+
+        // Reject all-zero outputs from X25519 (i.e. from low-order points)
+        // - https://github.com/tendermint/kms/issues/142
+        // - https://eprint.iacr.org/2019/526.pdf
+        if shared_secret.as_bytes().ct_eq(&[0x00; 32]).unwrap_u8() == 1 {
+            return Err(Error::other("low order key"));
+        }
+
+        // Sort by lexical order.
+        let local_eph_pubkey_bytes = *local_eph_pubkey.as_bytes();
+        let (low_eph_pubkey_bytes, high_eph_pubkey_bytes) =
+            sort32(local_eph_pubkey_bytes, *remote_eph_pubkey.as_bytes());
+
+        let mut transcript = Transcript::new(b"TENDERMINT_SECRET_CONNECTION_TRANSCRIPT_HASH");
+        transcript.append_message(b"EPHEMERAL_LOWER_PUBLIC_KEY", &low_eph_pubkey_bytes);
+        transcript.append_message(b"EPHEMERAL_UPPER_PUBLIC_KEY", &high_eph_pubkey_bytes);
+        transcript.append_message(b"DH_SECRET", shared_secret.as_bytes());
+
+        // Check if the local ephemeral public key was the least, lexicographically sorted.
+        let loc_is_least = local_eph_pubkey_bytes == low_eph_pubkey_bytes;
+
+        let kdf = Kdf::derive_secrets_and_challenge(shared_secret.as_bytes(), loc_is_least);
+
+        let mut sc_mac: [u8; 32] = [0; 32];
+
+        transcript.challenge_bytes(b"SECRET_CONNECTION_MAC", &mut sc_mac);
+
+        Ok(SecureConnectionState {
+            sc_mac,
+            send_cipher: ChaCha20Poly1305::new(&kdf.send_secret.into()),
+            recv_cipher: ChaCha20Poly1305::new(&kdf.recv_secret.into()),
+        })
+    }
+}
+
+impl SecureConnection {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+        let _size = self.read_stream.read_exact(buf).await?;
+        Ok(())
+    }
+
+    async fn write(&mut self, src: &[u8]) -> Result<(), io::Error> {
+        self.write_stream.write_all(src).await?;
+        Ok(())
+    }
+}
+
 pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
     let private_key = PrivateKey::generate();
     let local_eph_privkey = Scalar::random(&mut OsRng);
     let local_eph_pubkey = X25519_BASEPOINT * local_eph_privkey;
+
+    println!("start handshake, my peer id {:?}", private_key);
 
     let (mut read_half, mut write_half) = stream.into_split();
 
@@ -249,24 +247,27 @@ pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
 
     let remote_eph_pubkey = remote_eph_pubkey?;
 
-    let (local_signature, sc_mac, recv_cipher, send_cipher) =
-        got_key(&private_key, &local_eph_privkey, &remote_eph_pubkey)?;
+    let secure_connection_state = SecureConnectionState::got_key_init_secure_connection(
+        &local_eph_privkey,
+        &remote_eph_pubkey,
+    )?;
 
-    // Share each other's pubkey & challenge signature.
-    // NOTE: the data must be encrypted/decrypted using ciphers.
-    // let verification_key = private_key.public_key().verification_key;
+    let local_signature = &private_key.clone().sign(&secure_connection_state.sc_mac);
+
+    let auth_signature =
+        encode_auth_signature(&private_key.public_key().verification_key, local_signature);
+
     let auth_sig_msg = share_auth_signature(
         &mut read_half,
         &mut write_half,
-        &private_key,
-        &local_signature,
-        &recv_cipher,
-        &send_cipher,
+        auth_signature,
+        &secure_connection_state.recv_cipher,
+        &secure_connection_state.send_cipher,
     )
     .await?;
 
     // Authenticate remote pubkey.
-    let remote_pubkey = got_signature(auth_sig_msg, sc_mac)?;
+    let remote_pubkey = got_signature(auth_sig_msg, secure_connection_state.sc_mac)?;
 
     println!("We've authorized {:?}", remote_pubkey);
 

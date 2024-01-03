@@ -1,7 +1,7 @@
 use ed25519_consensus::{SigningKey, VerificationKey};
 use rand_core::OsRng;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrivateKey {
     signing_key: SigningKey,
 }
@@ -25,6 +25,7 @@ impl PrivateKey {
     }
 }
 
+#[derive(Debug)]
 pub struct PublicKey {
     pub verification_key: VerificationKey,
 }

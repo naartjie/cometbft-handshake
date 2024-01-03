@@ -60,3 +60,6 @@ handshake was successful
 - takes too long to start target node
 - Nonce shouldn't be a counter
 - Box<dyn Error>: narrow it down?
+- both sides should clearly print:
+  - local public peer id
+  - remote public peer id
