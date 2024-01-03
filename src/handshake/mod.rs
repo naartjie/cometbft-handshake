@@ -234,11 +234,6 @@ async fn receive_their_eph_pubkey(
     Ok(remote_eph_pubkey)
 }
 
-struct SecureConnection {
-    read_stream: OwnedReadHalf,
-    write_stream: OwnedWriteHalf,
-}
-
 pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
     let private_key = PrivateKey::generate();
     let local_eph_privkey = Scalar::random(&mut OsRng);

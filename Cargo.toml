@@ -13,7 +13,7 @@ tokio = { version = "1.35", features = [
 rand_core = { version = "0.6", default-features = false, features = ["std"] }
 ed25519-consensus = { version = "2.1", default-features = false }
 curve25519-dalek-ng = { version = "4.1", default-features = false }
-merlin = { version = "2", defaul-features = false }
+merlin = { version = "2" }
 subtle = { version = "2", default-features = false }
 zeroize = { version = "1", default-features = false }
 hkdf = { version = "0.12", default-features = false }

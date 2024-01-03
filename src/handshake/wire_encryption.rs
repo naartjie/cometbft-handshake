@@ -5,10 +5,7 @@ use chacha20poly1305::{
 use std::{cmp, error::Error, io};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpStream,
-    },
+    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
 };
 
 use crate::handshake::Nonce;
@@ -49,7 +46,7 @@ fn decrypt(
             in_out,
             tag.into(),
         )
-        .map_err(|e| format!("aead: {}", e.to_string()))?;
+        .map_err(|e| format!("aead: {}", e))?;
 
     Ok(in_out.len())
 }
@@ -83,7 +80,7 @@ pub async fn read_and_decrypt(
 
     // decrypt the frame
     let mut frame = [0_u8; TOTAL_FRAME_SIZE];
-    let res = decrypt(&sealed_frame, &cipher, &nonce, &mut frame);
+    let res = decrypt(&sealed_frame, cipher, nonce, &mut frame);
 
     if let Err(err) = res {
         return Err(io::Error::new(io::ErrorKind::Other, err.to_string()));
@@ -165,7 +162,7 @@ pub async fn encrypt_and_write(
             data_copy = &[0_u8; 0];
         }
         let sealed_frame = &mut [0_u8; TAG_SIZE + TOTAL_FRAME_SIZE];
-        encrypt(chunk, &cipher, &nonce, sealed_frame)
+        encrypt(chunk, cipher, nonce, sealed_frame)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         nonce.increment();
         // end encryption
