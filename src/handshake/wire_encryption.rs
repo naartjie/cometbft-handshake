@@ -53,28 +53,10 @@ fn decrypt(
 
 pub async fn read_and_decrypt(
     io_handler: &mut OwnedReadHalf,
-    // buffer: &mut Vec<u8>,
     nonce: &mut Nonce,
     cipher: &ChaCha20Poly1305,
     data: &mut [u8],
 ) -> io::Result<usize> {
-    // if !buffer.is_empty() {
-    //     let n = cmp::min(data.len(), buffer.len());
-    //     data.copy_from_slice(&buffer[..n]);
-    //     let mut leftover_portion = vec![
-    //         0;
-    //         buffer
-    //             .len()
-    //             .checked_sub(n)
-    //             .expect("leftover calculation failed")
-    //     ];
-    //     leftover_portion.clone_from_slice(&buffer[n..]);
-    //     // TODO!!!!
-    //     *buffer = leftover_portion;
-
-    //     return Ok(n);
-    // }
-
     let mut sealed_frame = [0_u8; TAG_SIZE + TOTAL_FRAME_SIZE];
     io_handler.read_exact(&mut sealed_frame).await?;
 
@@ -108,7 +90,6 @@ pub async fn read_and_decrypt(
 
     let n = cmp::min(data.len(), chunk.len());
     data[..n].copy_from_slice(&chunk[..n]);
-    // buffer.copy_from_slice(&chunk[n..]);
 
     Ok(n)
 }

@@ -55,7 +55,6 @@ async fn share_auth_signature(
         &auth_signature,
     )
     .await?;
-    // stream.write_all(&buf).await?;
 
     let mut buf = vec![0; AUTH_SIG_MSG_RESPONSE_LEN];
 
@@ -67,12 +66,11 @@ async fn share_auth_signature(
         &mut buf,
     )
     .await?;
-    // stream.read_exact(&mut buf).await?;
 
     codecs::decode_auth_signature(&buf)
 }
 
-pub fn got_signature(
+pub fn authenticate_remote_pubkey(
     auth_sig_msg: proto::p2p::AuthSigMessage,
     sc_mac: [u8; 32],
 ) -> Result<VerificationKey, std::io::Error> {
@@ -225,8 +223,7 @@ pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
     )
     .await?;
 
-    // Authenticate remote pubkey.
-    let remote_pubkey = got_signature(auth_sig_msg, secure_connection_state.sc_mac)?;
+    let remote_pubkey = authenticate_remote_pubkey(auth_sig_msg, secure_connection_state.sc_mac)?;
 
     println!("We've authorized {:?}", remote_pubkey);
 
