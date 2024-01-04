@@ -519,7 +519,7 @@ func NewNode(ctx context.Context,
 		option(node)
 	}
 
-	fmt.Printf("DONE (node startup)\n")
+	fmt.Printf("DONE (node ready)\n")
 
 	return node, nil
 }

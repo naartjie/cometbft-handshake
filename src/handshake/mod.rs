@@ -1,8 +1,6 @@
-use std::io;
 use std::io::Error;
 use std::slice;
 
-use ed25519_consensus::VerificationKey;
 use merlin::Transcript;
 use rand_core::OsRng;
 use subtle::ConstantTimeEq;
@@ -22,6 +20,8 @@ use kdf::Kdf;
 use keys::PrivateKey;
 use nonce::Nonce;
 
+use self::keys::PublicKey;
+
 mod codecs;
 mod kdf;
 mod keys;
@@ -29,17 +29,13 @@ mod nonce;
 mod wire_encryption;
 
 async fn share_auth_signature(
-    read_stream: &mut OwnedReadHalf,
-    write_stream: &mut OwnedWriteHalf,
-    secure_connection_state: &SecureConnectionState,
-    local_private_key: PrivateKey,
+    secure_connection: &mut SecureConnection,
+    local_private_key: &PrivateKey,
 ) -> Result<proto::p2p::AuthSigMessage, std::io::Error> {
     // 32 + 64 + (proto overhead = 1 prefix + 2 fields + 2 lengths + total length)
     const AUTH_SIG_MSG_RESPONSE_LEN: usize = 103;
 
-    let local_signature = local_private_key
-        .clone()
-        .sign(&secure_connection_state.sc_mac);
+    let local_signature = local_private_key.sign(&secure_connection.sc_mac);
 
     let auth_signature = codecs::encode_auth_signature(
         &local_private_key.public_key().verification_key,
@@ -49,9 +45,9 @@ async fn share_auth_signature(
     let mut send_nonce = Nonce::default();
 
     let _size = wire_encryption::encrypt_and_write(
-        write_stream,
+        &mut secure_connection.write_stream,
         &mut send_nonce,
-        &secure_connection_state.send_cipher,
+        &secure_connection.send_cipher,
         &auth_signature,
     )
     .await?;
@@ -60,9 +56,9 @@ async fn share_auth_signature(
 
     let mut recv_nonce = Nonce::default();
     let _size = wire_encryption::read_and_decrypt(
-        read_stream,
+        &mut secure_connection.read_stream,
         &mut recv_nonce,
-        &secure_connection_state.recv_cipher,
+        &secure_connection.recv_cipher,
         &mut buf,
     )
     .await?;
@@ -73,7 +69,7 @@ async fn share_auth_signature(
 pub fn authenticate_remote_pubkey(
     auth_sig_msg: proto::p2p::AuthSigMessage,
     sc_mac: [u8; 32],
-) -> Result<VerificationKey, std::io::Error> {
+) -> Result<PublicKey, std::io::Error> {
     let to_err = |e| Error::other(format!("signature error: {:?}", e));
 
     let pk_sum = auth_sig_msg.pub_key.and_then(|key| key.sum);
@@ -91,7 +87,7 @@ pub fn authenticate_remote_pubkey(
 
     remote_pubkey.verify(&remote_sig, &sc_mac).map_err(to_err)?;
 
-    Ok(remote_pubkey)
+    Ok(remote_pubkey.into())
 }
 
 async fn send_our_eph_pubkey(
@@ -123,19 +119,18 @@ async fn receive_their_eph_pubkey(
 struct SecureConnection {
     read_stream: OwnedReadHalf,
     write_stream: OwnedWriteHalf,
-}
-
-struct SecureConnectionState {
     sc_mac: [u8; 32],
     send_cipher: ChaCha20Poly1305,
     recv_cipher: ChaCha20Poly1305,
 }
 
-impl SecureConnectionState {
-    pub fn got_key_init_secure_connection(
+impl SecureConnection {
+    pub fn new(
+        read_stream: OwnedReadHalf,
+        write_stream: OwnedWriteHalf,
         local_eph_privkey: &Scalar,
         remote_eph_pubkey: &MontgomeryPoint,
-    ) -> Result<SecureConnectionState, std::io::Error> {
+    ) -> Result<SecureConnection, std::io::Error> {
         fn sort32(first: [u8; 32], second: [u8; 32]) -> ([u8; 32], [u8; 32]) {
             if second > first {
                 (first, second)
@@ -173,7 +168,9 @@ impl SecureConnectionState {
 
         transcript.challenge_bytes(b"SECRET_CONNECTION_MAC", &mut sc_mac);
 
-        Ok(SecureConnectionState {
+        Ok(SecureConnection {
+            read_stream,
+            write_stream,
             sc_mac,
             send_cipher: ChaCha20Poly1305::new(&kdf.send_secret.into()),
             recv_cipher: ChaCha20Poly1305::new(&kdf.recv_secret.into()),
@@ -181,51 +178,49 @@ impl SecureConnectionState {
     }
 }
 
-impl SecureConnection {
-    async fn read(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
-        let _size = self.read_stream.read_exact(buf).await?;
-        Ok(())
-    }
+// impl SecureConnection {
+//     async fn read(&mut self, buf: &mut [u8]) -> Result<(), io::Error> {
+//         let _size = self.read_stream.read_exact(buf).await?;
+//         Ok(())
+//     }
 
-    async fn write(&mut self, src: &[u8]) -> Result<(), io::Error> {
-        self.write_stream.write_all(src).await?;
-        Ok(())
-    }
-}
+//     async fn write(&mut self, src: &[u8]) -> Result<(), io::Error> {
+//         self.write_stream.write_all(src).await?;
+//         Ok(())
+//     }
+// }
 
 pub async fn do_handshake(stream: TcpStream) -> Result<(), std::io::Error> {
-    let private_key = PrivateKey::generate();
+    let local_private_key = PrivateKey::generate();
+
     let local_eph_privkey = Scalar::random(&mut OsRng);
     let local_eph_pubkey = X25519_BASEPOINT * local_eph_privkey;
 
-    println!("start handshake, my peer id {:?}", private_key);
-
-    let (mut read_half, mut write_half) = stream.into_split();
-
     // send and receive eph pubkeys in parallel
+    let (mut read_stream, mut write_stream) = stream.into_split();
     let (_, remote_eph_pubkey) = tokio::join!(
-        send_our_eph_pubkey(&mut write_half, &local_eph_pubkey),
-        receive_their_eph_pubkey(&mut read_half),
+        send_our_eph_pubkey(&mut write_stream, &local_eph_pubkey),
+        receive_their_eph_pubkey(&mut read_stream),
     );
 
     let remote_eph_pubkey = remote_eph_pubkey?;
 
-    let secure_connection_state = SecureConnectionState::got_key_init_secure_connection(
+    let mut secure_connection = SecureConnection::new(
+        read_stream,
+        write_stream,
         &local_eph_privkey,
         &remote_eph_pubkey,
     )?;
 
-    let auth_sig_msg = share_auth_signature(
-        &mut read_half,
-        &mut write_half,
-        &secure_connection_state,
-        private_key,
-    )
-    .await?;
+    let auth_sig_msg = share_auth_signature(&mut secure_connection, &local_private_key).await?;
 
-    let remote_pubkey = authenticate_remote_pubkey(auth_sig_msg, secure_connection_state.sc_mac)?;
+    let remote_pubkey = authenticate_remote_pubkey(auth_sig_msg, secure_connection.sc_mac)?;
 
-    println!("We've authorized {:?}", remote_pubkey);
+    println!(
+        "\nPeer handshake authorized\n    this node = {}\n  remote node = {}",
+        local_private_key.public_key(),
+        remote_pubkey,
+    );
 
     Ok(())
 }
