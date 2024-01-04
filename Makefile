@@ -27,11 +27,11 @@ help:
 init-target:
 	@test -d ~/.cometbft || (cd target-node && go run cmd/cometbft/main.go init)
 
-## start cometbf target node for testing
+## start cometbf target node
 run-target: init-target
 	cd target-node && go run cmd/cometbft/main.go node --proxy_app=kvstore --log_level=error
 
-## start cometbf target node for testing (with logging enabled - more verbose)
+## start cometbf target node (debug logging enabled)
 run-target-debug: init-target
 	cd target-node && go run cmd/cometbft/main.go node --proxy_app=kvstore --log_level=debug
 
