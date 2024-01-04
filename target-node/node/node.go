@@ -272,6 +272,9 @@ func NewNode(ctx context.Context,
 	logger log.Logger,
 	options ...Option,
 ) (*Node, error) {
+
+	fmt.Printf("Node starting...")
+
 	blockStore, stateDB, err := initDBs(config, dbProvider)
 	if err != nil {
 		return nil, err
@@ -515,6 +518,8 @@ func NewNode(ctx context.Context,
 	for _, option := range options {
 		option(node)
 	}
+
+	fmt.Printf("DONE (node startup)\n")
 
 	return node, nil
 }

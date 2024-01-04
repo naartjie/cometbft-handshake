@@ -170,6 +170,12 @@ func MakeSecretConnection(conn io.ReadWriteCloser, locPrivKey crypto.PrivKey) (*
 
 	// We've authorized.
 	sc.remPubKey = remPubKey
+	fmt.Printf(
+		"\nPeer handshake authorized\n    this node = %x\n  remote node = %x\n",
+		locPubKey.Address().Bytes(),
+		remPubKey.Address().Bytes(),
+	)
+
 	return sc, nil
 }
 
