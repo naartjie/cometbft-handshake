@@ -1,47 +1,52 @@
 # Peer-to-peer handshake
 
-This is a Rust p2p handshake implementation for [CometBFT](https://github.com/cometbft/cometbft). Prior art exists at [tendermint-rs](https://github.com/informalsystems/tendermint-rs.git), it was used to bootstrap this project and uses the same dependencies, it also reuses the tendermint-proto, the proto struct definitions used by the protocol.
+This is a Rust p2p handshake implementation for [CometBFT](https://github.com/cometbft/cometbft) (previously Tendermint Core). Prior art exists at [tendermint-rs](https://github.com/informalsystems/tendermint-rs.git), it was used to get this project started and so many of the dependencies are re-used as well as [tendermint-proto](https://crates.io/crates/tendermint-proto), the proto struct definitions used by the protocol.
 
-## Pre-requisites
+# Running it
 
-The following versions were used:
+## TL;DR
+
+Run these in 2 separate terminals, side by side:
+```sh
+make run-target
+make run-handshake
+```
+
+## A more detailed version
+
+### Pre-requisites
+
+The following versions were used during development:
 - go 1.21.5 (darwin/arm64)
 - cargo/rustc 1.74.1 (a28077b28 2023-12-04)
 
 ### Start target p2p node
 
-This project contains a vendered [CometBFT](https://github.com/cometbft/cometbft) under the [./target-node] directory (via git subtree). It has some tweaks in order to print meaningful info when a new p2p handshake is authorized.
+This project contains a vendered [CometBFT](https://github.com/cometbft/cometbft) under the [`target-node`](./target-node) directory (via git subtree). I intentionally pulled the latest (unstable) code from `main` because I was curious if the handshake worked with the latest development version (it also works with the latest stable release [`v0.38.2`](https://github.com/cometbft/cometbft/tree/v0.38.2)).
+
+This vendored version contains some minor modifications - namely `Printf`'s for info about node startup and successful handshakes.
 
 To run the node:
-```
+```sh
 make run-target
 ```
 
-### Connect from rust
+When you first run that, it's going to create the `~/.cometbft/{config,data}`. You might want to delete that afterwards.
 
-```
+### Connect from Rust
+
+Run the Rust part of the handshake in another terminal:
+```sh
 make run-handshake
 ```
 
 ### Verifying it worked
 
-In the first terminal verify there is a message printed:
-
-`We've authorized peer id <...>`
-
-In the second terminal you should see:
-
+When the handshake is successful both nodes print info (identical formatting):
 ```
-connecting to 127.0.0.1:26656, my peer id is VerificationKey("...")
-handshake was successful
+Peer handshake authorized
+    this node = 2c9594256d694681e50f7406b3a094ffefb88bef
+  remote node = dd742ac67c5c0a92b40f810bfcb60355db0613a9
 ```
 
-
-## TODO
-
-- takes too long to start target node
-- Nonce shouldn't be a counter
-- Box<dyn Error>: narrow it down?
-- both sides should clearly print:
-  - local public peer id
-  - remote public peer id
+`this node` ID should match `remote node` ID in the other terminal, and vice versa.
