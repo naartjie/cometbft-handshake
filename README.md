@@ -1,6 +1,6 @@
 # Peer-to-peer handshake
 
-This is a Rust p2p handshake implementation for [CometBFT](https://github.com/cometbft/cometbft) (previously Tendermint Core). Prior art exists at [tendermint-rs](https://github.com/informalsystems/tendermint-rs.git), it was used to get this project started and so many of the dependencies are re-used as well as [tendermint-proto](https://crates.io/crates/tendermint-proto), the proto struct definitions used by the protocol.
+This is a Rust p2p handshake implementation for [CometBFT](https://github.com/cometbft/cometbft) (previously Tendermint Core).
 
 # Running it
 
@@ -22,7 +22,7 @@ The following versions were used during development:
 
 ### Start target p2p node
 
-This project contains a vendered [CometBFT](https://github.com/cometbft/cometbft) under the [`target-node`](./target-node) directory (via git subtree). I intentionally pulled the latest (unstable) code from `main` because I was curious if the handshake worked with the latest development version (it also works with the latest stable release [`v0.38.2`](https://github.com/cometbft/cometbft/tree/v0.38.2)).
+This project contains a vendered [CometBFT](https://github.com/cometbft/cometbft) under the [`target-node`](./target-node) directory (I used a shallow git subtree, but still the docs directory is around 50Mb, hence the larger size). I intentionally pulled the latest (unstable) code from `main` because I was curious if the handshake worked with the latest development version (it also works with the latest stable release [`v0.38.2`](https://github.com/cometbft/cometbft/tree/v0.38.2)).
 
 This vendored version contains some minor modifications - namely `Printf`'s for info about node startup and successful handshakes.
 
@@ -54,6 +54,8 @@ Peer handshake authorized
 # Implementation
 
 For the handshake entrypoint, please see `src/handshake/mod.rs#do_handshake()`. This function encompasses the handshake interaction. If there are no `Err`'s then the happy path means the connection is authorized by the end of the function, i.e. a successful handshake.
+
+[tendermint-rs](https://github.com/informalsystems/tendermint-rs.git) was an already existing implementation in Rust, and so I used it to bootstrap. Many of the dependencies are re-used as well as [tendermint-proto](https://crates.io/crates/tendermint-proto), the proto struct definitions used by the protocol. Even though this implementation is a complete overhaul, some reused code remains. Were this to become an open source project, this would need to be attributed (as well as a licence included).
 
 ## Algorithm
 
