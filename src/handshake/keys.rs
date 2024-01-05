@@ -1,5 +1,4 @@
 use ed25519_consensus::{SigningKey, VerificationKey};
-use rand_core::OsRng;
 use sha2::{digest::Digest, Sha256};
 
 use std::fmt;
@@ -10,9 +9,7 @@ pub struct PrivateKey(SigningKey);
 
 impl PrivateKey {
     pub fn generate() -> Self {
-        let csprng = OsRng {};
-        let signing_key = ed25519_consensus::SigningKey::new(csprng);
-
+        let signing_key = ed25519_consensus::SigningKey::new(rand_core::OsRng);
         Self(signing_key)
     }
 

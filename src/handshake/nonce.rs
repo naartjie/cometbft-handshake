@@ -1,33 +1,21 @@
-use std::convert::TryInto;
+const SIZE: usize = 12;
+const COUNTER_MAX: u128 = 2 ^ (12 * 8);
 
-/// Size of a `ChaCha20` (IETF) nonce
-pub const SIZE: usize = 12;
-
-/// `SecretConnection` nonces (i.e. `ChaCha20` nonces)
-pub struct Nonce(pub [u8; SIZE]);
-
-impl Default for Nonce {
-    fn default() -> Self {
-        Self([0_u8; SIZE])
-    }
-}
+#[derive(Default)]
+pub struct Nonce(u128);
 
 impl Nonce {
-    /// Increment the nonce's counter by 1
     pub fn increment(&mut self) {
-        let counter: u64 = u64::from_le_bytes(self.0[4..].try_into().expect("framing failed"));
-        self.0[4..].copy_from_slice(
-            &counter
-                .checked_add(1)
-                .expect("overflow in counter addition")
-                .to_le_bytes(),
-        );
+        let next_counter = self.0 + 1;
+        assert!(next_counter < COUNTER_MAX, "nonce overflow");
+
+        self.0 = next_counter;
     }
 
-    /// Serialize nonce as bytes (little endian)
     #[inline]
-    #[must_use]
-    pub fn to_bytes(&self) -> &[u8] {
-        &self.0[..]
+    pub fn value(&self) -> [u8; SIZE] {
+        let mut bytes = [0u8; SIZE];
+        bytes.copy_from_slice(&self.0.to_le_bytes()[..SIZE]);
+        bytes
     }
 }

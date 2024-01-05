@@ -40,7 +40,7 @@ fn decrypt(
 
     recv_cipher
         .decrypt_in_place_detached(
-            GenericArray::from_slice(recv_nonce.to_bytes()),
+            GenericArray::from_slice(&recv_nonce.value()),
             b"",
             in_out,
             tag.into(),
@@ -111,7 +111,7 @@ fn encrypt(
 
     let tag = send_cipher
         .encrypt_in_place_detached(
-            GenericArray::from_slice(send_nonce.to_bytes()),
+            GenericArray::from_slice(&send_nonce.value()),
             b"",
             &mut sealed_frame[..TOTAL_FRAME_SIZE],
         )
