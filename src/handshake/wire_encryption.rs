@@ -9,7 +9,6 @@ use tokio::{
 };
 
 use crate::handshake::Nonce;
-// use chacha20poly1305::Nonce;
 
 const TAG_SIZE: usize = 16;
 const DATA_MAX_SIZE: usize = 1024;

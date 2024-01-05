@@ -6,49 +6,49 @@ use std::fmt;
 use std::fmt::{Display, Write};
 
 #[derive(Clone)]
-pub struct PrivateKey {
-    signing_key: SigningKey,
-}
+pub struct PrivateKey(SigningKey);
 
 impl PrivateKey {
     pub fn generate() -> Self {
         let csprng = OsRng {};
         let signing_key = ed25519_consensus::SigningKey::new(csprng);
 
-        Self { signing_key }
+        Self(signing_key)
     }
 
     pub fn public_key(&self) -> PublicKey {
-        PublicKey {
-            verification_key: self.signing_key.verification_key(),
-        }
+        PublicKey(self.0.verification_key())
     }
 
-    pub fn sign(&self, msg: &[u8]) -> ed25519_consensus::Signature {
-        self.signing_key.sign(msg)
+    pub fn sign(&self, msg: &[u8]) -> [u8; 64] {
+        self.0.sign(msg).to_bytes()
     }
 }
 
 #[derive(Clone)]
-pub struct PublicKey {
-    pub verification_key: VerificationKey,
+pub struct PublicKey(VerificationKey);
+
+impl PublicKey {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.as_ref().to_vec()
+    }
 }
 
 impl From<VerificationKey> for PublicKey {
-    fn from(vk: ed25519_consensus::VerificationKey) -> Self {
-        PublicKey {
-            verification_key: vk,
-        }
+    fn from(verification_key: ed25519_consensus::VerificationKey) -> Self {
+        PublicKey(verification_key)
     }
 }
 
 impl Display for PublicKey {
+    /// hex encoded string - 40 chars long
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let digest = Sha256::digest(self.verification_key.as_bytes());
+        let digest = Sha256::digest(self.0.as_bytes());
         write!(f, "{}", hex_string(digest[..20].to_vec()))
     }
 }
 
+/// Converts Vec<u8> into a hex encoded string
 pub fn hex_string(bytes: Vec<u8>) -> String {
     bytes
         .iter()

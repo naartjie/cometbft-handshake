@@ -3,6 +3,8 @@ use prost::Message as _;
 use std::io::Error;
 use tendermint_proto::v0_38 as proto;
 
+use super::keys::PublicKey;
+
 pub fn decode_remote_eph_pubkey(bytes: &[u8]) -> Result<MontgomeryPoint, std::io::Error> {
     // go implementation
     // https://github.com/tendermint/tendermint/blob/9e98c74/p2p/conn/secret_connection.go#L315-L323
@@ -15,19 +17,14 @@ pub fn decode_remote_eph_pubkey(bytes: &[u8]) -> Result<MontgomeryPoint, std::io
     Ok(MontgomeryPoint(eph_pubkey_bytes))
 }
 
-pub fn encode_auth_signature(
-    pub_key: &ed25519_consensus::VerificationKey,
-    signature: &ed25519_consensus::Signature,
-) -> Vec<u8> {
+pub fn encode_auth_signature(pub_key: &PublicKey, signature: &[u8; 64]) -> Vec<u8> {
     let pub_key = proto::crypto::PublicKey {
-        sum: Some(proto::crypto::public_key::Sum::Ed25519(
-            pub_key.as_ref().to_vec(),
-        )),
+        sum: Some(proto::crypto::public_key::Sum::Ed25519(pub_key.to_bytes())),
     };
 
     let msg = proto::p2p::AuthSigMessage {
         pub_key: Some(pub_key),
-        sig: signature.to_bytes().to_vec(),
+        sig: signature.to_vec(),
     };
 
     let mut buf = Vec::new();

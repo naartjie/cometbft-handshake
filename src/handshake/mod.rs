@@ -132,7 +132,6 @@ impl SecureConnection {
     }
 
     async fn write(&mut self, src: &[u8]) -> io::Result<()> {
-        // self.write_stream.write_all(src).await?;
         let _size = wire_encryption::encrypt_and_write(
             &mut self.write_stream,
             &mut self.send_nonce,
@@ -153,10 +152,8 @@ impl SecureConnection {
 
         let local_signature = local_private_key.sign(&self.sc_mac);
 
-        let auth_signature = codecs::encode_auth_signature(
-            &local_private_key.public_key().verification_key,
-            &local_signature,
-        );
+        let auth_signature =
+            codecs::encode_auth_signature(&local_private_key.public_key(), &local_signature);
 
         self.write(&auth_signature).await?;
 
